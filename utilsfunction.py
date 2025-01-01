@@ -21,14 +21,14 @@ def train__supervised_classic(model, X_train, X_test, y_train, y_test):
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
     y_scores = model.predict_proba(X_test)[:, 1] 
-    return y_test, y_pred, y_scores
+    return (y_pred, y_scores)
 
 def train_supervised_imbalanced(method, model, X_train, X_test, y_train, y_test):
     X_resampled, y_resampled = method.fit_resample(X_train, y_train)
     model.fit(X_resampled, y_resampled)
     y_pred = model.predict(X_test)
     y_scores = model.predict_proba(X_test)[:, 1]
-    return y_test, y_pred, y_scores
+    return (y_pred, y_scores)
 
 def print_metrics(y_test, y_pred):
     print("ROC AUC score : ", roc_auc_score(y_test, y_pred))
