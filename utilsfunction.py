@@ -2,6 +2,9 @@ from sklearn.preprocessing import StandardScaler
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from collections import Counter
+
+from sklearn.utils.multiclass import unique_labels
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc, roc_curve, average_precision_score, classification_report, f1_score
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
@@ -12,7 +15,7 @@ from imblearn.under_sampling import TomekLinks
 from sklearn.ensemble import RandomForestClassifier
 from imblearn.over_sampling import SMOTE
 from imblearn.ensemble import BalancedRandomForestClassifier
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import StandardScaler, LabelEncoder, LabelBinarizer
 
 # Remove the time column and normalise the data
 def preprocess_data(data):
@@ -173,17 +176,59 @@ def train__supervised_classic_multiple_classes(model, X_train, X_test, y_train, 
 
 # Train the model with the supervised method with resampling for multiple classes
 def train_supervised_imbalanced_multiple_classes(method, model, X_train, X_test, y_train, y_test):
-    X_resampled, y_resampled = method.fit_resample(X_train, y_train)
+    if isinstance(method, SMOTE):
+        y_train = pd.Series(y_train, index=X_train.index) # Convert the labels to a pandas Series to keep the index
+        mask = y_train != -1
+        X_train, y_train = X_train[mask], y_train[mask]
+        X_resampled, y_resampled = method.fit_resample(X_train, y_train)
+        # Add the rare classes
+        X_rare, y_rare = X_train[~mask], y_train[~mask]
+        X_resampled = np.vstack((X_resampled, X_rare))
+        y_resampled = np.concatenate((y_resampled, y_rare))
+    else:
+        X_resampled, y_resampled = method.fit_resample(X_train, y_train)
+    
     model.fit(X_resampled, y_resampled)
     y_pred = model.predict(X_test)
     y_scores = model.predict_proba(X_test)
     return (y_pred, y_scores)
 
 # Print the metrics (ROC AUC, Average precision score, Classifier report) for multiple classes
-def print_metrics_multiple_classes(y_test, y_pred, y_scores):
-    print("ROC AUC score : ", roc_auc_score(y_test, y_scores, multi_class='ovr'))
-    print("Average precision score : ", average_precision_score(y_test, y_scores, average='weighted'))
-    print('Classifier report : \n', classification_report(y_test, y_pred))
+def calculate_metrics_multiple_classes(y_test, y_scores, model):
+    # Align the dimensions of y_test and y_scores
+    all_classes = unique_labels(y_test)
+    y_scores_aligned = np.zeros((y_scores.shape[0], len(all_classes)))
+    for idx, cls in enumerate(model.classes_):
+        if cls in all_classes:  # Vérifie si la classe existe dans y_test
+            col_index = np.where(all_classes == cls)[0][0]
+            y_scores_aligned[:, col_index] = y_scores[:, idx]
+
+    y_scores = y_scores_aligned
+
+    roc_auc = roc_auc_score(y_test, y_scores, multi_class='ovr')
+    pr = average_precision_score(y_test, y_scores, average='weighted')
+    return roc_auc, pr
+
+# Filter the rare classes when there are too few samples (for SMOTE)
+def filter_rare_classes(y, threshold=10):
+    class_counts = Counter(y)
+    rare_classes = [cls for cls, count in class_counts.items() if count < threshold]
+    y_filtered = np.where(np.isin(y, rare_classes), -1, y) # The rare classes are regrouped in the -1 class
+    return y_filtered
+
+# Align the dimensions of y_test and y_scores by adding the missing columns to y_scores (for SMOTE)
+def align_y_test_and_scores(y_test, y_scores):
+    lb = LabelBinarizer()
+    y_test_binarized = lb.fit_transform(y_test)
+    
+    # Add the missing classes to y_scores
+    all_classes = lb.classes_
+    current_classes = range(y_scores.shape[1])
+    missing_classes = set(all_classes) - set(current_classes)
+    for cls in missing_classes:
+        y_scores = np.insert(y_scores, y_scores.shape[1], 0, axis=1)
+    
+    return y_test_binarized, y_scores
 
 def methodological_approach(X_train, X_test, y_train, y_test):
     methods_roc = []
@@ -192,7 +237,7 @@ def methodological_approach(X_train, X_test, y_train, y_test):
     # Ravel the labels to avoid warnings
     y_train = y_train.ravel()
     y_test = y_test.ravel()
-
+    
     # Approche supervisée classique : Régression logistique
     model = LogisticRegression(random_state=42, max_iter=1000)
     y_pred, y_scores = train__supervised_classic_multiple_classes(model, X_train, X_test, y_train, y_test)
@@ -211,42 +256,42 @@ def methodological_approach(X_train, X_test, y_train, y_test):
     y_pred, y_scores = train_supervised_imbalanced_multiple_classes(method, model, X_train, X_test, y_train, y_test)
     methods_roc.append(roc_auc_score(y_test, y_scores, multi_class='ovr'))
     methods_pr.append(average_precision_score(y_test, y_scores, average='weighted'))
-
+    
     # Oversampling : SMOTE
+    y_train_filter = filter_rare_classes(y_train)
+    y_test_filter = filter_rare_classes(y_test)
     model = RandomForestClassifier(random_state=42)
-    method = SMOTE(k_neighbors=4)
-    y_pred, y_scores = train_supervised_imbalanced_multiple_classes(method, model, X_train, X_test, y_train, y_test)
-    methods_roc.append(roc_auc_score(y_test, y_scores, multi_class='ovr'))
-    methods_pr.append(average_precision_score(y_test, y_scores, average='weighted'))
+    method = SMOTE()
+    y_pred, y_scores = train_supervised_imbalanced_multiple_classes(method, model, X_train, X_test, y_train_filter, y_test_filter)
+    y_test_align, y_scores = align_y_test_and_scores(y_test, y_scores)
+    roc_auc, pr = calculate_metrics_multiple_classes(y_test_align, y_scores, model)
+    methods_roc.append(roc_auc)
+    methods_pr.append(pr)
 
     # Balanced Random Forest
     model = BalancedRandomForestClassifier(random_state=42)
     y_pred, y_scores = train__supervised_classic_multiple_classes(model, X_train, X_test, y_train, y_test)
-    methods_roc.append(roc_auc_score(y_test, y_scores, multi_class='ovr'))
-    methods_pr.append(average_precision_score(y_test, y_scores, average='weighted'))
-
+    roc_auc, pr = calculate_metrics_multiple_classes(y_test, y_scores, model)
+    methods_roc.append(roc_auc)
+    methods_pr.append(pr)
+    
     # Isolation Forest
     model = IsolationForest(random_state=42)
     y_true, iso_forest_scores = train_and_evaluate_isforest(X_train, X_test, y_train, y_test, model)
-    methods_roc.append(roc_auc_score(y_true, iso_forest_scores))
-    methods_pr.append(average_precision_score(y_true, iso_forest_scores))
+    y_true_binary = np.where(y_true == 'normal', 1, 0)
+    y_scores = -iso_forest_scores
+    methods_roc.append(roc_auc_score(y_true_binary, y_scores))
+    methods_pr.append(average_precision_score(y_true_binary, y_scores))
 
     # Local Outlier Factor
     model = LocalOutlierFactor(novelty=True)
     y_true, lof_scores = train_and_evaluate_lof(X_train, X_test, y_train, y_test, 20)
-    methods_roc.append(roc_auc_score(y_true, lof_scores))
-    methods_pr.append(average_precision_score(y_true, lof_scores))
+    y_true_binary = np.where(y_true == 'normal', 1, 0)
+    y_scores = -lof_scores
+    methods_roc.append(roc_auc_score(y_true_binary, lof_scores))
+    methods_pr.append(average_precision_score(y_true_binary, lof_scores))
 
-    # Plot the results
-    plt.figure(figsize=(12, 6))
-    plt.bar(["Logistic Regression", "SVM", "Random Forest (Tomek Links)", "Random Forest (SMOTE)", "Balanced Random Forest", "Isolation Forest", "Local Outlier Factor"], methods_roc, label="ROC AUC")
-    plt.bar(["Logistic Regression", "SVM", "Random Forest (Tomek Links)", "Random Forest (SMOTE)", "Balanced Random Forest", "Isolation Forest", "Local Outlier Factor"], methods_pr, label="Average Precision")
-    plt.xlabel("Méthode")
-    plt.ylabel("Score")
-    plt.title("Scores des différentes méthodes")
-    plt.legend()
-    plt.show()
-
+    return methods_roc, methods_pr
 
 ###### FONCTIONS POUR NOVELTY DETECTION ########
 def evaluate_model(y_true, scores, preds, model_name):
