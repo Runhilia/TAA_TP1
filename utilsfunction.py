@@ -2,7 +2,7 @@ from sklearn.preprocessing import StandardScaler
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_auc_score, precision_recall_curve, auc, roc_curve, average_precision_score, classification_report
+from sklearn.metrics import roc_auc_score, precision_recall_curve, auc, roc_curve, average_precision_score, classification_report, f1_score
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.model_selection import StratifiedKFold
@@ -247,3 +247,16 @@ def methodological_approach(X_train, X_test, y_train, y_test):
     plt.legend()
     plt.show()
 
+
+###### FONCTIONS POUR NOVELTY DETECTION ########
+def evaluate_model(y_true, scores, preds, model_name):
+    roc_auc = roc_auc_score(y_true, scores)
+    precision, recall, _ = precision_recall_curve(y_true, scores)
+    pr_auc = auc(recall, precision)
+    f1 = f1_score(y_true, preds)
+
+    print(f"--- {model_name} ---")
+    print(f"ROC AUC: {roc_auc:.4f}")
+    print(f"PR AUC: {pr_auc:.4f}")
+    print(f"F1 Score: {f1:.4f}")
+    print("\nClassification Report:\n", classification_report(y_true, preds))
